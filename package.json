@@ -1,0 +1,36 @@
+{
+  "name": "zeroshot-mcp-events",
+  "version": "0.1.0",
+  "description": "Bridge Zeroshot Platform run events to ntfy so ntfy-mcp can deliver them to chats and agents.",
+  "type": "module",
+  "bin": {
+    "zeroshot-mcp-events": "./zeroshot-mcp-events.mjs"
+  },
+  "main": "./zeroshot-mcp-events.mjs",
+  "files": [
+    "zeroshot-mcp-events.mjs",
+    "README.md",
+    "LICENSE",
+    "fixtures/"
+  ],
+  "scripts": {
+    "start": "node zeroshot-mcp-events.mjs",
+    "smoke": "node zeroshot-mcp-events.mjs --stdin --dry-run --topic zs-smoke < fixtures/example-events.ndjson"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "zeroshot",
+    "ntfy",
+    "mcp",
+    "notifications",
+    "bridge"
+  ],
+  "author": "naqerl",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naqerl/zeroshot-mcp-events.git"
+  }
+}

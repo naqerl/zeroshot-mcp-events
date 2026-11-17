@@ -1,0 +1,35 @@
+[Unit]
+Description=zeroshot-mcp-events — bridge Zeroshot Platform run events to ntfy
+Documentation=https://github.com/naqerl/zeroshot-mcp-events
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zs-mcp
+Group=zs-mcp
+# Secrets live here (mode 0600), never in ExecStart.
+EnvironmentFile=/etc/zeroshot-mcp-events.env
+ExecStart=/usr/bin/node /opt/zeroshot-mcp-events/zeroshot-mcp-events.mjs --follow
+Restart=on-failure
+RestartSec=10s
+# SIGTERM flushes in-flight publishes before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Hardening: the bridge needs the network and nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
