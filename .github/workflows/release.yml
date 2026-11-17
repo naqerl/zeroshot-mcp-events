@@ -63,6 +63,29 @@ jobs:
           build-args: |
             ZEROSHOT_VERSION=latest
 
+      # A private package cannot be pulled by the cluster, and a package created
+      # while the repository was private stays private. The workflow token is
+      # the one credential that may change that, so try it on every release and
+      # keep the result visible in the run summary.
+      - name: Make the package pullable
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pkg="${GITHUB_REPOSITORY,,}"
+          pkg="${pkg#*/}"
+          owner="${GITHUB_REPOSITORY%%/*}"
+          code=$(curl -sS -o /tmp/visibility.json -w '%{http_code}' -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"visibility":"public"}' \
+            "https://api.github.com/users/$owner/packages/container/$pkg")
+          echo "package visibility PATCH -> $code"
+          cat /tmp/visibility.json || true
+          if [ "$code" != "200" ]; then
+            echo "::warning::could not set ghcr.io/$owner/$pkg to public (HTTP $code); if it stays private the cluster needs an imagePullSecret"
+          fi
+
       - name: Summarise
         run: |
           {
