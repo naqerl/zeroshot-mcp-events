@@ -142,17 +142,32 @@ journalctl -u zeroshot-mcp-events -f
 
 ## Docker
 
+The published image is `ghcr.io/naqerl/zeroshot-mcp-events`; every `v*` tag
+publishes `:<tag>`, `:<major>.<minor>` and `:latest` for `linux/amd64` and
+`linux/arm64` (see `.github/workflows/release.yml`). It ships the current
+upstream Zeroshot CLI (`npm install -g @the-open-engine-company/zeroshot`), so
+`--watch` and `--follow` work with no mounted binary — the CLI authenticates
+from `ZEROSHOT_API_KEY`.
+
 ```bash
-docker build -t zeroshot-mcp-events .
-docker run --rm -i -e NTFY_URL=https://ntfy.naqerl.com \
-  -e NTFY_TOKEN=tk_xxx -e NTFY_TOPIC=zs-runs \
-  zeroshot-mcp-events --stdin < events.ndjson
+docker run --rm -e NTFY_URL=https://ntfy.naqerl.com \
+  -e NTFY_TOPIC=zs-runs -e NTFY_TOKEN=tk_xxx -e ZEROSHOT_API_KEY=zs_xxx \
+  ghcr.io/naqerl/zeroshot-mcp-events:latest --follow --target platform
 ```
 
-The image runs as uid 10001 and contains only Node and this script. For
-`--watch`/`--follow` mount a `zsp` binary and its config into the container
-(`-v /usr/local/bin/zsp:/usr/local/bin/zsp:ro -v ~/.config/zeroshot:/home/zs/.config/zeroshot:ro`)
-or point `--zsp` at a wrapper.
+To read events from stdin instead of the platform (dry runs, replaying a saved
+stream):
+
+```bash
+docker run --rm -i -e NTFY_URL=https://ntfy.naqerl.com -e NTFY_TOPIC=zs-runs \
+  ghcr.io/naqerl/zeroshot-mcp-events:latest --stdin < events.ndjson
+```
+
+Locally, `docker build -t zeroshot-mcp-events .` builds the same thing; pass
+`--build-arg ZEROSHOT_VERSION=16.0.0` to pin the CLI instead of tracking latest.
+
+The image runs as uid 10001, needs only outbound HTTPS (platform API + ntfy) and
+writes nothing to disk.
 
 ## Security notes
 
