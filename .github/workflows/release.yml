@@ -68,7 +68,7 @@ jobs:
       # the one credential that may change that, so try it on every release and
       # keep the result visible in the run summary.
       - name: Make the package pullable
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
