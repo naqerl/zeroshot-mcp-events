@@ -1,6 +1,6 @@
 {
   "name": "zeroshot-mcp-events",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Bridge Zeroshot Platform run events to ntfy so ntfy-mcp can deliver them to chats and agents.",
   "type": "module",
   "bin": {

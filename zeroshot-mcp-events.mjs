@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.2";
 
 /* ------------------------------------------------------------------ */
 /* constants                                                          */
@@ -126,6 +126,9 @@ BEHAVIOUR
   --poll-secs <n>        --follow polling interval                 [default 30]
   --max-watchers <n>     --follow concurrent watchers              [default 4]
   --zsp <path>           zsp binary                             [env ZSP_BIN] [default zsp]
+  --api-url <url>        platform API base           [env ZEROSHOT_API_URL] [default https://api.app.zeroshot.sh]
+  --api-key <token>      platform API key; enables the direct API lister
+                                                    [env ZEROSHOT_API_KEY] (prefer the env var)
   --target <name>        zsp target                                 [default platform]
   --click-template <u>   Click header; {runId} and {run} are substituted
   --after <cursor>       passed through to \`zsp watch --after\`
@@ -148,6 +151,13 @@ function parseArgs(argv) {
     token: process.env.NTFY_TOKEN || "",
     zsp: process.env.ZSP_BIN || "zsp",
     target: "platform",
+    // The platform list endpoint answers with every run in one document. The
+    // CLI refuses a hosted list response over 64 KiB, so once an account has
+    // enough runs `zsp list` fails permanently with "hosted run list response
+    // is too large" and --follow can never start. Reading the same endpoint
+    // directly keeps the bridge working; the CLI stays the fallback.
+    apiUrl: process.env.ZEROSHOT_API_URL || "https://api.app.zeroshot.sh",
+    apiKey: process.env.ZEROSHOT_API_KEY || "",
     kinds: "",
     quietPhases: false,
     noTokenOnly: false,
@@ -172,6 +182,8 @@ function parseArgs(argv) {
     ["--kinds", "kinds"],
     ["--poll-secs", "pollSecs"],
     ["--max-watchers", "maxWatchers"],
+    ["--api-url", "apiUrl"],
+    ["--api-key", "apiKey"],
     ["--zsp", "zsp"],
     ["--target", "target"],
     ["--click-template", "clickTemplate"],
@@ -599,6 +611,16 @@ function phaseOfRun(run) {
 }
 
 async function listRuns(opts) {
+  if (opts.apiKey) {
+    const url = `${opts.apiUrl.replace(/\/+$/, "")}/native-v2/runs`;
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${opts.apiKey}`, accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(`platform list answered ${res.status}`);
+    const parsed = await res.json();
+    const runs = Array.isArray(parsed) ? parsed : Array.isArray(parsed.runs) ? parsed.runs : [];
+    return runs;
+  }
   const args = ["list", "--target", opts.target];
   const child = spawn(opts.zsp, args, { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
