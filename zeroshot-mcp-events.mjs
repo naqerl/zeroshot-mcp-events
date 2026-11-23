@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 
 /* ------------------------------------------------------------------ */
 /* constants                                                          */
@@ -57,6 +57,13 @@ const PHASE_PRIORITY = {
 };
 
 const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
+
+// Consecutive identical CLI stderr lines are collapsed inside this window.
+const STDERR_COALESCE_MS = 5 * 60_000;
+
+// Failed watchers retry on 30s, 60s, then 120s between attempts.
+const RETRY_BASE_MS = 30_000;
+const RETRY_MAX_MS = 120_000;
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                            */
@@ -476,6 +483,7 @@ function createPipeline(opts) {
   let skipped = 0;
   let malformed = 0;
   let stopped = false;
+  const hubWarned = new Set();
 
   const matchesKinds = (labelsOut) => {
     if (!opts.kindMatchers) return true;
@@ -489,6 +497,18 @@ function createPipeline(opts) {
     if (!ev) {
       malformed++;
       log(`skipping malformed NDJSON line: ${oneLine(trimmed, 120)}`);
+      return;
+    }
+    // Hub job ids start with `hj_`. This bridge follows the platform target
+    // (`--target platform`); a hub run reaching the pipeline means something
+    // else is feeding the stream, and publishing it would mix two id spaces on
+    // the same ntfy topic. Drop it, warning once per run.
+    if (/^hj_/.test(ev.runId)) {
+      skipped++;
+      if (!hubWarned.has(ev.runId)) {
+        hubWarned.add(ev.runId);
+        log(`ignoring hub run ${shortRun(ev.runId)}: this bridge follows the platform target only`);
+      }
       return;
     }
     if (ev.cursor && seen.has(`${ev.runId}\u0000${ev.cursor}`)) {
@@ -561,8 +581,43 @@ async function runStdin(opts, pipeline) {
   await pipeline.drain();
 }
 
+/**
+ * stderr writer for one watcher. The platform/CLI skew produces an identical
+ * multi-line error on every reconnect; repeating it per attempt buries the log,
+ * so an unchanged line is emitted once per window and counted in between.
+ */
+function createStderrWriter(runId, opts) {
+  let signature = "";
+  let lastAt = 0;
+  let suppressed = 0;
+  let hinted = false;
+  return (text) => {
+    const now = Date.now();
+    if (text === signature && now - lastAt < STDERR_COALESCE_MS) {
+      suppressed++;
+      lastAt = now;
+      return;
+    }
+    if (suppressed > 0) {
+      log(`zsp: (${suppressed} repeat${suppressed === 1 ? "" : "s"} of the previous line suppressed)`);
+      suppressed = 0;
+    }
+    signature = text;
+    lastAt = now;
+    log(`zsp: ${oneLine(text, 300)}`);
+    if (!hinted && /unknown field|invalid JSON-RPC response/i.test(text)) {
+      hinted = true;
+      log(
+        `hint: the platform event shape is newer than the CLI inside this image ` +
+          `(rebuild with ZEROSHOT_VERSION>=16.1.0); retrying with backoff`
+      );
+    }
+    if (opts.verbose) log(`watch ${shortRun(runId)} stderr`);
+  };
+}
+
 /** Spawn `zsp watch` and feed its stdout through the pipeline. */
-function spawnWatch(opts, pipeline, runId, { onExit } = {}) {
+function spawnWatch(opts, pipeline, runId, { onExit, onEvent, writeStderr: writeStderrArg } = {}) {
   const args = ["watch", "--target", opts.target];
   if (opts.after) args.push("--after", opts.after);
   args.push(runId);
@@ -570,8 +625,14 @@ function spawnWatch(opts, pipeline, runId, { onExit } = {}) {
 
   const child = spawn(opts.zsp, args, { stdio: ["ignore", "pipe", "pipe"] });
   let sawTerminal = false;
+  let sawLine = false;
+  const writeStderr = writeStderrArg || createStderrWriter(runId, opts);
 
   const done = readStreamLines(child.stdout, async (line) => {
+    if (!sawLine && line.trim()) {
+      sawLine = true;
+      if (onEvent) onEvent(runId);
+    }
     await pipeline.handleLine(line, runId);
   }).then(async () => {
     await pipeline.drain();
@@ -587,7 +648,8 @@ function spawnWatch(opts, pipeline, runId, { onExit } = {}) {
 
   child.stderr.on("data", (buf) => {
     const text = buf.toString().trim();
-    if (text) log(`zsp: ${oneLine(text, 300)}`);
+    if (!text) return;
+    writeStderr(text);
     if (/terminalResult/.test(text)) sawTerminal = true;
   });
   child.on("error", (err) => log(`could not start ${opts.zsp}: ${err.message}`));
@@ -637,12 +699,24 @@ async function listRuns(opts) {
 async function runFollow(opts, pipeline) {
   const watchers = new Map(); // runId -> { child, done }
   const ended = new Set();
+  const retries = new Map(); // runId -> { failures, nextAt }
+  // One writer per run, shared by every respawn: a retry must not re-log the
+  // same CLI error that was already reported for this run inside the window.
+  const stderrWriters = new Map();
 
   const reap = (runId, code) => {
-    const w = watchers.get(runId);
-    if (w && w.done) ended.add(runId);
     watchers.delete(runId);
-    if (opts.verbose) log(`watcher ${shortRun(runId)} ended (${code})`);
+    if (ended.has(runId)) return;
+    // A failed watch used to be written to `ended`, which dropped the run for
+    // the life of the process: no retry, no later notifications. Instead,
+    // schedule a retry with 30s/60s/120s backoff.
+    const prev = retries.get(runId) || { failures: 0, nextAt: 0 };
+    const failures = prev.failures + 1;
+    const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (failures - 1));
+    retries.set(runId, { failures, nextAt: Date.now() + delay });
+    log(
+      `watcher ${shortRun(runId)} ended (${code}); retry ${failures} in ${Math.round(delay / 1000)}s`
+    );
   };
 
   const tick = async () => {
@@ -665,14 +739,32 @@ async function runFollow(opts, pipeline) {
           w.child.kill("SIGTERM");
         }
         ended.add(runId);
+        retries.delete(runId);
+        stderrWriters.delete(runId);
         continue;
       }
       if (watchers.has(runId) || ended.has(runId)) continue;
+      const retry = retries.get(runId);
+      if (retry && retry.nextAt > Date.now()) {
+        if (opts.verbose) {
+          const left = Math.ceil((retry.nextAt - Date.now()) / 1000);
+          log(`watch ${shortRun(runId)} backing off for another ${left}s`);
+        }
+        continue;
+      }
       if (watchers.size >= opts.maxWatchers) {
         if (opts.verbose) log(`max-watchers reached (${opts.maxWatchers}), deferring ${shortRun(runId)}`);
         continue;
       }
-      const spawned = spawnWatch(opts, pipeline, runId, { onExit: reap });
+      const writer = stderrWriters.get(runId) || createStderrWriter(runId, opts);
+      stderrWriters.set(runId, writer);
+      const spawned = spawnWatch(opts, pipeline, runId, {
+        onExit: reap,
+        // First line of a (re)started watch proves the CLI works again: reset
+        // the backoff so a later failure starts from 30s.
+        onEvent: (id) => retries.delete(id),
+        writeStderr: writer,
+      });
       watchers.set(runId, spawned);
       log(`watching ${shortRun(runId)} (${phase || "unknown"})`);
     }

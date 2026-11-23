@@ -144,10 +144,17 @@ journalctl -u zeroshot-mcp-events -f
 
 The published image is `ghcr.io/naqerl/zeroshot-mcp-events`; every `v*` tag
 publishes `:<tag>`, `:<major>.<minor>` and `:latest` for `linux/amd64` and
-`linux/arm64` (see `.github/workflows/release.yml`). It ships the current
-upstream Zeroshot CLI (`npm install -g @the-open-engine-company/zeroshot`), so
-`--watch` and `--follow` work with no mounted binary — the CLI authenticates
-from `ZEROSHOT_API_KEY`.
+`linux/arm64` (see `.github/workflows/release.yml`). It ships the upstream
+Zeroshot CLI (`npm install -g @the-open-engine-company/zeroshot`), so `--watch`
+and `--follow` work with no mounted binary — the CLI authenticates from
+`ZEROSHOT_API_KEY`.
+
+The CLI version is pinned in the `Dockerfile` (`ARG ZEROSHOT_VERSION=16.2.0`)
+and in CI. Do not go back to `latest`: the platform changes the event wire
+format independently, and a CLI that predates a field rejects the whole frame
+(16.0.0 looped on `unknown field \`recordedAt\``). 16.1.0+ understands the
+current frames; 17.x requires target-discovery protocol `v3`, which the
+platform API does not serve yet.
 
 ```bash
 docker run --rm -e NTFY_URL=https://ntfy.naqerl.com \
@@ -164,7 +171,7 @@ docker run --rm -i -e NTFY_URL=https://ntfy.naqerl.com -e NTFY_TOPIC=zs-runs \
 ```
 
 Locally, `docker build -t zeroshot-mcp-events .` builds the same thing; pass
-`--build-arg ZEROSHOT_VERSION=16.0.0` to pin the CLI instead of tracking latest.
+`--build-arg ZEROSHOT_VERSION=16.2.0` to override the pinned CLI.
 
 The image runs as uid 10001, needs only outbound HTTPS (platform API + ntfy) and
 writes nothing to disk.

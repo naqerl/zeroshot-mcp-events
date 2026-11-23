@@ -61,7 +61,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            ZEROSHOT_VERSION=latest
+            ZEROSHOT_VERSION=16.2.0
 
       # A private package cannot be pulled by the cluster, and a package created
       # while the repository was private stays private. The workflow token is
